@@ -1,0 +1,18 @@
+# Compiled files
+*.o
+*.out
+*.exe
+
+# Build directory
+build/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# InMemDB runtime data
+*.log
+*.db
