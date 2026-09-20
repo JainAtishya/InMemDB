@@ -130,3 +130,43 @@ const char *hash_table_get(HashTable *table, const char *key)
 
     return NULL;
 }
+
+int hash_table_delete(HashTable *table, const char *key)
+{
+    if (table == NULL || key == NULL)
+    {
+        return 0;
+    }
+
+    size_t index = hash_key(key) % table->size;
+
+    Entry *current = table->buckets[index];
+    Entry *previous = NULL;
+
+    while (current != NULL)
+    {
+        if (strcmp(current->key, key) == 0)
+        {
+            // Case 1: deleting the first node
+            if (previous == NULL)
+            {
+                table->buckets[index] = current->next;
+            }
+            // Case 2: deleting a node in the middle/end
+            else
+            {
+                previous->next = current->next;
+            }
+
+            entry_destroy(current);
+            table->count--;
+
+            return 1;
+        }
+
+        previous = current;
+        current = current->next;
+    }
+
+    return 0;
+}

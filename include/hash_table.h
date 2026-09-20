@@ -15,5 +15,6 @@ void hash_table_destroy(HashTable *table);
 size_t hash_key(const char *key);
 int hash_table_set(HashTable *table, const char *key, const char *value);
 const char *hash_table_get(HashTable *table, const char *key);
+int hash_table_delete(HashTable *table, const char *key);
 
 #endif

@@ -11,41 +11,38 @@ int main(void)
         return 1;
     }
 
-    printf("SET name = Atishya\n");
     hash_table_set(table, "name", "Atishya");
+    hash_table_set(table, "age", "21");
+    hash_table_set(table, "city", "Delhi");
 
-    const char *value = hash_table_get(table, "name");
+    printf("Before delete:\n");
 
-    if (value != NULL)
+    printf("name = %s\n", hash_table_get(table, "name"));
+    printf("age = %s\n", hash_table_get(table, "age"));
+    printf("city = %s\n", hash_table_get(table, "city"));
+
+    printf("\nDeleting age...\n");
+
+    if (hash_table_delete(table, "age"))
     {
-        printf("GET name = %s\n", value);
+        printf("age deleted successfully\n");
     }
     else
     {
-        printf("Key not found\n");
+        printf("age not found\n");
     }
 
-    printf("\nUpdating name = Rahul\n");
-    hash_table_set(table, "name", "Rahul");
+    printf("\nAfter delete:\n");
 
-    value = hash_table_get(table, "name");
+    printf("name = %s\n", hash_table_get(table, "name"));
+    printf("age = %s\n", hash_table_get(table, "age"));
+    printf("city = %s\n", hash_table_get(table, "city"));
 
-    if (value != NULL)
+    printf("\nDeleting unknown key...\n");
+
+    if (hash_table_delete(table, "unknown"))
     {
-        printf("GET name = %s\n", value);
-    }
-    else
-    {
-        printf("Key not found\n");
-    }
-
-    printf("\nGET unknown:\n");
-
-    value = hash_table_get(table, "unknown");
-
-    if (value != NULL)
-    {
-        printf("Value = %s\n", value);
+        printf("deleted\n");
     }
     else
     {
