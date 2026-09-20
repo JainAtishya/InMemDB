@@ -25,8 +25,23 @@ HashTable *hash_table_create(size_t size)
 
 void hash_table_destroy(HashTable *table)
 {
-    if (table == NULL) {
+    if (table == NULL)
+    {
         return;
+    }
+
+    for (size_t i = 0; i < table->size; i++)
+    {
+        Entry *current = table->buckets[i];
+
+        while (current != NULL)
+        {
+            Entry *next = current->next;
+
+            entry_destroy(current);
+
+            current = next;
+        }
     }
 
     free(table->buckets);
@@ -104,10 +119,17 @@ int hash_table_set(HashTable *table, const char *key, const char *value)
     strcpy(entry->value, value);
 
     entry->next = table->buckets[index];
-
+    
     table->buckets[index] = entry;
 
     table->count++;
+
+    double load_factor = (double)table->count / table->size;
+
+    if (load_factor > LOAD_FACTOR)
+    {
+        hash_table_resize(table, table->size * RESIZE_FACTOR);
+    }
 
     return 1;
 }
@@ -169,4 +191,38 @@ int hash_table_delete(HashTable *table, const char *key)
     }
 
     return 0;
+}
+
+int hash_table_resize(HashTable *table, size_t new_size)
+{
+    Entry **new_buckets = calloc(new_size, sizeof(Entry *));
+    
+    if (new_buckets == NULL)
+    {
+        return 0;
+    }
+
+    for (size_t i = 0; i < table->size; i++)
+    {
+        Entry *entry = table->buckets[i];
+
+        while (entry != NULL)
+        {
+            Entry *next = entry->next;
+
+            size_t new_index = hash_key(entry->key) % new_size;
+
+            entry->next = new_buckets[new_index];
+            new_buckets[new_index] = entry;
+
+            entry = next;
+        }
+    }
+
+    free(table->buckets);
+
+    table->buckets = new_buckets;
+    table->size = new_size;
+
+    return 1;
 }
