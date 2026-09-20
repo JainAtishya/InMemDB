@@ -111,3 +111,22 @@ int hash_table_set(HashTable *table, const char *key, const char *value)
 
     return 1;
 }
+
+const char *hash_table_get(HashTable *table, const char *key)
+{
+    size_t index = hash_key(key) % table->size;
+
+    Entry *entry = table->buckets[index];
+
+    while (entry != NULL)
+    {
+        if (strcmp(entry->key, key) == 0)
+        {
+            return entry->value;
+        }
+
+        entry = entry->next;
+    }
+
+    return NULL;
+}

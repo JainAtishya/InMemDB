@@ -11,30 +11,46 @@ int main(void)
         return 1;
     }
 
-    printf("Hash table created\n");
-    printf("Size: %zu\n", table->size);
-    printf("Count: %zu\n\n", table->count);
-
-    /* Insert */
-    printf("Setting name = Atishya\n");
+    printf("SET name = Atishya\n");
     hash_table_set(table, "name", "Atishya");
 
-    printf("Count: %zu\n", table->count);
+    const char *value = hash_table_get(table, "name");
 
-    /* Update */
-    printf("Updating name = Rahul\n");
+    if (value != NULL)
+    {
+        printf("GET name = %s\n", value);
+    }
+    else
+    {
+        printf("Key not found\n");
+    }
+
+    printf("\nUpdating name = Rahul\n");
     hash_table_set(table, "name", "Rahul");
 
-    printf("Count: %zu\n", table->count);
+    value = hash_table_get(table, "name");
 
-    /* Find the bucket directly for testing */
-    size_t index = hash_key("name") % table->size;
+    if (value != NULL)
+    {
+        printf("GET name = %s\n", value);
+    }
+    else
+    {
+        printf("Key not found\n");
+    }
 
-    Entry *entry = table->buckets[index];
+    printf("\nGET unknown:\n");
 
-    printf("\nBucket index for 'name': %zu\n", index);
-    printf("Key: %s\n", entry->key);
-    printf("Value: %s\n", entry->value);
+    value = hash_table_get(table, "unknown");
+
+    if (value != NULL)
+    {
+        printf("Value = %s\n", value);
+    }
+    else
+    {
+        printf("Key not found\n");
+    }
 
     hash_table_destroy(table);
 
