@@ -2,6 +2,7 @@
 
 #include "hash_table.h"
 #include "command.h"
+#include "persistence.h"
 
 int main(void)
 {
@@ -10,6 +11,13 @@ int main(void)
     if (table == NULL)
     {
         printf("Failed to create database\n");
+        return 1;
+    }
+
+    if (!persistence_load(table))
+    {
+        printf("Failed to load AOF\n");
+        hash_table_destroy(table);
         return 1;
     }
 

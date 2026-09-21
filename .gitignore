@@ -17,3 +17,6 @@ build/
 # InMemDB runtime data
 *.log
 *.db
+
+# Append only files
+*.aof
