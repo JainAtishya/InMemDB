@@ -63,4 +63,9 @@ int hash_table_resize(
     size_t new_size
 );
 
+long long hash_table_ttl(
+    HashTable *table,
+    const char *key
+);
+
 #endif

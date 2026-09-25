@@ -374,3 +374,51 @@ int hash_table_resize(
 
     return 1;
 }
+
+long long hash_table_ttl(
+    HashTable *table,
+    const char *key
+)
+{
+    if (table == NULL || key == NULL)
+    {
+        return -2;
+    }
+
+    size_t index = hash_key(key) % table->size;
+
+    Entry *entry = table->buckets[index];
+
+    while (entry != NULL)
+    {
+        if (strcmp(entry->key, key) == 0)
+        {
+            /*
+             * Key exists but has no expiration.
+             */
+            if (entry->expires_at == 0)
+            {
+                return -1;
+            }
+
+            time_t now = time(NULL);
+
+            /*
+             * Key has expired.
+             */
+            if (now >= entry->expires_at)
+            {
+                return -2;
+            }
+
+            return (long long)(entry->expires_at - now);
+        }
+
+        entry = entry->next;
+    }
+
+    /*
+     * Key does not exist.
+     */
+    return -2;
+}

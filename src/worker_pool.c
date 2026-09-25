@@ -10,6 +10,7 @@
 #include "worker_pool.h"
 #include "command.h"
 
+
 static Task *task_pop(WorkerPool *pool)
 {
     Task *task = pool->head;
@@ -31,13 +32,16 @@ static Task *task_pop(WorkerPool *pool)
     return task;
 }
 
+
 static int get_worker_id(WorkerPool *pool)
 {
     pthread_t current_thread = pthread_self();
 
     for (int i = 0; i < WORKER_COUNT; i++)
     {
-        if (pthread_equal(current_thread, pool->workers[i]))
+        if (pthread_equal(
+                current_thread,
+                pool->workers[i]))
         {
             return i;
         }
@@ -46,6 +50,17 @@ static int get_worker_id(WorkerPool *pool)
     return -1;
 }
 
+
+/**
+ * Determine whether a command only reads the database.
+ *
+ * Read commands:
+ *
+ * GET key
+ * TTL key
+ *
+ * Everything else gets a write lock.
+ */
 static int is_read_command(const char *command)
 {
     while (isspace((unsigned char)*command))
@@ -53,28 +68,60 @@ static int is_read_command(const char *command)
         command++;
     }
 
-    if (strncasecmp(command, "get", 3) != 0)
+
+    /*
+     * GET
+     */
+    if (strncasecmp(command, "get", 3) == 0)
     {
-        return 0;
+        command += 3;
+
+        return *command == '\0' ||
+               isspace((unsigned char)*command);
     }
 
-    command += 3;
 
-    return *command == '\0' || isspace((unsigned char)*command);
+    /*
+     * TTL
+     */
+    if (strncasecmp(command, "ttl", 3) == 0)
+    {
+        command += 3;
+
+        return *command == '\0' ||
+               isspace((unsigned char)*command);
+    }
+
+
+    return 0;
 }
+
 
 static void *worker_main(void *arg)
 {
     WorkerPool *pool = arg;
+
     int worker_id = get_worker_id(pool);
 
-    printf("[Worker %d] started\n", worker_id);
+    printf(
+        "[Worker %d] started\n",
+        worker_id
+    );
+
 
     while (1)
     {
-        pthread_mutex_lock(&pool->queue_mutex);
+        /*
+         * Wait for a task.
+         */
+        pthread_mutex_lock(
+            &pool->queue_mutex
+        );
 
-        while (pool->head == NULL && !pool->shutting_down)
+        while (
+            pool->head == NULL &&
+            !pool->shutting_down
+        )
         {
             pthread_cond_wait(
                 &pool->queue_cond,
@@ -82,9 +129,18 @@ static void *worker_main(void *arg)
             );
         }
 
-        if (pool->head == NULL && pool->shutting_down)
+
+        /*
+         * Shutdown condition.
+         */
+        if (
+            pool->head == NULL &&
+            pool->shutting_down
+        )
         {
-            pthread_mutex_unlock(&pool->queue_mutex);
+            pthread_mutex_unlock(
+                &pool->queue_mutex
+            );
 
             printf(
                 "[Worker %d] shutting down\n",
@@ -94,14 +150,19 @@ static void *worker_main(void *arg)
             break;
         }
 
+
         Task *task = task_pop(pool);
 
-        pthread_mutex_unlock(&pool->queue_mutex);
+        pthread_mutex_unlock(
+            &pool->queue_mutex
+        );
+
 
         if (task == NULL)
         {
             continue;
         }
+
 
         printf(
             "[Worker %d] picked task for client FD %d: %s\n",
@@ -110,11 +171,21 @@ static void *worker_main(void *arg)
             task->command
         );
 
+
         char response[MAX_COMMAND_SIZE];
+
         response[0] = '\0';
 
         int result;
 
+
+        /*
+         * =====================================================
+         * READ COMMAND
+         * =====================================================
+         *
+         * GET and TTL can execute concurrently.
+         */
         if (is_read_command(task->command))
         {
             printf(
@@ -122,13 +193,17 @@ static void *worker_main(void *arg)
                 worker_id
             );
 
-            pthread_rwlock_rdlock(&pool->db_lock);
+            pthread_rwlock_rdlock(
+                &pool->db_lock
+            );
+
 
             printf(
-                "[Worker %d] executing GET for client FD %d\n",
+                "[Worker %d] executing read command for client FD %d\n",
                 worker_id,
                 task->client_fd
             );
+
 
             result = command_execute(
                 pool->table,
@@ -137,13 +212,30 @@ static void *worker_main(void *arg)
                 sizeof(response)
             );
 
-            pthread_rwlock_unlock(&pool->db_lock);
+
+            pthread_rwlock_unlock(
+                &pool->db_lock
+            );
+
 
             printf(
                 "[Worker %d] released read lock\n",
                 worker_id
             );
         }
+
+
+        /*
+         * =====================================================
+         * WRITE COMMAND
+         * =====================================================
+         *
+         * SET
+         * DEL
+         * PING
+         * EXIT
+         * etc.
+         */
         else
         {
             printf(
@@ -151,13 +243,18 @@ static void *worker_main(void *arg)
                 worker_id
             );
 
-            pthread_rwlock_wrlock(&pool->db_lock);
+
+            pthread_rwlock_wrlock(
+                &pool->db_lock
+            );
+
 
             printf(
                 "[Worker %d] executing write command for client FD %d\n",
                 worker_id,
                 task->client_fd
             );
+
 
             result = command_execute(
                 pool->table,
@@ -166,7 +263,11 @@ static void *worker_main(void *arg)
                 sizeof(response)
             );
 
-            pthread_rwlock_unlock(&pool->db_lock);
+
+            pthread_rwlock_unlock(
+                &pool->db_lock
+            );
+
 
             printf(
                 "[Worker %d] released write lock\n",
@@ -174,6 +275,10 @@ static void *worker_main(void *arg)
             );
         }
 
+
+        /*
+         * Send response to client.
+         */
         if (response[0] != '\0')
         {
             ssize_t sent = send(
@@ -197,6 +302,13 @@ static void *worker_main(void *arg)
             }
         }
 
+
+        /*
+         * EXIT requested.
+         *
+         * Tell server/main thread that this
+         * client connection should be closed.
+         */
         if (result == 1)
         {
             printf(
@@ -205,48 +317,75 @@ static void *worker_main(void *arg)
                 task->client_fd
             );
 
+
             ssize_t written = write(
                 pool->notify_pipe[1],
                 &task->client_fd,
                 sizeof(task->client_fd)
             );
 
+
             if (written != sizeof(task->client_fd))
             {
-                perror("write notify pipe");
+                perror(
+                    "write notify pipe"
+                );
             }
         }
+
 
         free(task);
     }
 
+
     return NULL;
 }
+
 
 int worker_pool_init(
     WorkerPool *pool,
     HashTable *table
 )
 {
-    if (pool == NULL || table == NULL)
+    if (
+        pool == NULL ||
+        table == NULL
+    )
     {
         return 0;
     }
 
-    memset(pool, 0, sizeof(*pool));
+
+    memset(
+        pool,
+        0,
+        sizeof(*pool)
+    );
+
 
     pool->table = table;
 
+
+    /*
+     * Notification pipe.
+     */
     if (pipe(pool->notify_pipe) == -1)
     {
         perror("pipe");
+
         return 0;
     }
 
-    if (pthread_mutex_init(
+
+    /*
+     * Queue mutex.
+     */
+    if (
+        pthread_mutex_init(
             &pool->queue_mutex,
             NULL
-        ) != 0)
+        ) != 0
+    )
     {
         close(pool->notify_pipe[0]);
         close(pool->notify_pipe[1]);
@@ -254,10 +393,16 @@ int worker_pool_init(
         return 0;
     }
 
-    if (pthread_cond_init(
+
+    /*
+     * Queue condition variable.
+     */
+    if (
+        pthread_cond_init(
             &pool->queue_cond,
             NULL
-        ) != 0)
+        ) != 0
+    )
     {
         pthread_mutex_destroy(
             &pool->queue_mutex
@@ -269,10 +414,16 @@ int worker_pool_init(
         return 0;
     }
 
-    if (pthread_rwlock_init(
+
+    /*
+     * Database read/write lock.
+     */
+    if (
+        pthread_rwlock_init(
             &pool->db_lock,
             NULL
-        ) != 0)
+        ) != 0
+    )
     {
         pthread_cond_destroy(
             &pool->queue_cond
@@ -288,21 +439,33 @@ int worker_pool_init(
         return 0;
     }
 
+
     pool->shutting_down = 0;
 
-    for (int i = 0; i < WORKER_COUNT; i++)
+
+    /*
+     * Create workers.
+     */
+    for (
+        int i = 0;
+        i < WORKER_COUNT;
+        i++
+    )
     {
-        if (pthread_create(
+        if (
+            pthread_create(
                 &pool->workers[i],
                 NULL,
                 worker_main,
                 pool
-            ) != 0)
+            ) != 0
+        )
         {
             fprintf(
                 stderr,
                 "Failed to create worker thread\n"
             );
+
 
             pthread_mutex_lock(
                 &pool->queue_mutex
@@ -318,6 +481,7 @@ int worker_pool_init(
                 &pool->queue_mutex
             );
 
+
             for (int j = 0; j < i; j++)
             {
                 pthread_join(
@@ -325,6 +489,7 @@ int worker_pool_init(
                     NULL
                 );
             }
+
 
             pthread_rwlock_destroy(
                 &pool->db_lock
@@ -345,13 +510,16 @@ int worker_pool_init(
         }
     }
 
+
     printf(
         "Worker pool started with %d workers.\n",
         WORKER_COUNT
     );
 
+
     return 1;
 }
+
 
 int worker_pool_submit(
     WorkerPool *pool,
@@ -359,19 +527,27 @@ int worker_pool_submit(
     const char *command
 )
 {
-    if (pool == NULL || command == NULL)
+    if (
+        pool == NULL ||
+        command == NULL
+    )
     {
         return 0;
     }
 
-    Task *task = malloc(sizeof(Task));
+
+    Task *task = malloc(
+        sizeof(Task)
+    );
 
     if (task == NULL)
     {
         return 0;
     }
 
+
     task->client_fd = client_fd;
+
 
     strncpy(
         task->command,
@@ -379,13 +555,19 @@ int worker_pool_submit(
         MAX_COMMAND_SIZE - 1
     );
 
-    task->command[MAX_COMMAND_SIZE - 1] = '\0';
+
+    task->command[
+        MAX_COMMAND_SIZE - 1
+    ] = '\0';
+
 
     task->next = NULL;
+
 
     pthread_mutex_lock(
         &pool->queue_mutex
     );
+
 
     if (pool->shutting_down)
     {
@@ -398,6 +580,10 @@ int worker_pool_submit(
         return 0;
     }
 
+
+    /*
+     * Add task to queue.
+     */
     if (pool->tail == NULL)
     {
         pool->head = task;
@@ -409,22 +595,27 @@ int worker_pool_submit(
         pool->tail = task;
     }
 
+
     printf(
         "[Queue] Task added for client FD %d: %s\n",
         client_fd,
         command
     );
 
+
     pthread_cond_signal(
         &pool->queue_cond
     );
+
 
     pthread_mutex_unlock(
         &pool->queue_mutex
     );
 
+
     return 1;
 }
+
 
 int worker_pool_get_notify_fd(
     WorkerPool *pool
@@ -438,6 +629,7 @@ int worker_pool_get_notify_fd(
     return pool->notify_pipe[0];
 }
 
+
 void worker_pool_destroy(
     WorkerPool *pool
 )
@@ -447,21 +639,33 @@ void worker_pool_destroy(
         return;
     }
 
+
     pthread_mutex_lock(
         &pool->queue_mutex
     );
 
+
     pool->shutting_down = 1;
+
 
     pthread_cond_broadcast(
         &pool->queue_cond
     );
 
+
     pthread_mutex_unlock(
         &pool->queue_mutex
     );
 
-    for (int i = 0; i < WORKER_COUNT; i++)
+
+    /*
+     * Wait for workers.
+     */
+    for (
+        int i = 0;
+        i < WORKER_COUNT;
+        i++
+    )
     {
         pthread_join(
             pool->workers[i],
@@ -469,9 +673,14 @@ void worker_pool_destroy(
         );
     }
 
+
+    /*
+     * Free remaining queued tasks.
+     */
     pthread_mutex_lock(
         &pool->queue_mutex
     );
+
 
     Task *current = pool->head;
 
@@ -484,27 +693,36 @@ void worker_pool_destroy(
         current = next;
     }
 
+
     pool->head = NULL;
     pool->tail = NULL;
+
 
     pthread_mutex_unlock(
         &pool->queue_mutex
     );
 
+
     pthread_rwlock_destroy(
         &pool->db_lock
     );
+
 
     pthread_cond_destroy(
         &pool->queue_cond
     );
 
+
     pthread_mutex_destroy(
         &pool->queue_mutex
     );
 
+
     close(pool->notify_pipe[0]);
     close(pool->notify_pipe[1]);
 
-    printf("Worker pool stopped.\n");
+
+    printf(
+        "Worker pool stopped.\n"
+    );
 }
