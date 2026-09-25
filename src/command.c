@@ -1,46 +1,36 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 
 #include "command.h"
 #include "persistence.h"
 
 #define INPUT_SIZE 256
-#define MAX_ARGS 4
+#define MAX_ARGS 5
 
-
-/*
- * Parse a command string into argv-style arguments.
- *
- * Example:
- *
- * SET name Atishya
- *
- * becomes:
- *
- * argv[0] = "SET"
- * argv[1] = "name"
- * argv[2] = "Atishya"
- *
- * Quoted arguments are supported:
- *
- * SET message "Hello World"
- *
- * becomes:
- *
- * argv[0] = "SET"
- * argv[1] = "message"
- * argv[2] = "Hello World"
- */
-int parse_command(char *input, char *argv[], int max_args)
+int parse_command(
+    char *input,
+    char *argv[],
+    int max_args
+)
 {
     int argc = 0;
+
     char *p = input;
 
     while (*p != '\0')
     {
-        /* Skip whitespace */
-        while (isspace((unsigned char)*p))
+        /*
+         * Skip whitespace.
+         */
+        while (
+            isspace(
+                (unsigned char)*p
+            )
+        )
         {
             p++;
         }
@@ -56,10 +46,11 @@ int parse_command(char *input, char *argv[], int max_args)
         }
 
         /*
-         * Quoted argument
+         * Quoted argument.
          *
          * Example:
-         * "Hello World"
+         *
+         * SET message "Hello World"
          */
         if (*p == '"')
         {
@@ -69,16 +60,20 @@ int parse_command(char *input, char *argv[], int max_args)
 
             char *out = p;
 
-            while (*p != '\0' && *p != '"')
+            while (
+                *p != '\0' &&
+                *p != '"'
+            )
             {
                 *out = *p;
+
                 out++;
                 p++;
             }
 
             /*
-             * Opening quote existed but closing quote
-             * was never found.
+             * Opening quote existed but
+             * closing quote was not found.
              */
             if (*p != '"')
             {
@@ -94,14 +89,18 @@ int parse_command(char *input, char *argv[], int max_args)
         }
 
         /*
-         * Normal argument
+         * Normal argument.
          */
         else
         {
             argv[argc++] = p;
 
-            while (*p != '\0' &&
-                   !isspace((unsigned char)*p))
+            while (
+                *p != '\0' &&
+                !isspace(
+                    (unsigned char)*p
+                )
+            )
             {
                 p++;
             }
@@ -117,46 +116,84 @@ int parse_command(char *input, char *argv[], int max_args)
     return argc;
 }
 
-
 /*
- * Execute one database command.
+ * Parse positive integer seconds.
  *
- * This function is the important part of the networking refactor.
+ * Returns:
  *
- * The function does NOT:
- *
- * - read from stdin
- * - print to stdout
- * - call recv()
- * - call send()
- *
- * Instead:
- *
- * input    -> command received from CLI/socket
- * response -> response generated for CLI/socket
- *
- * Return value:
- *
- *  0 = command executed normally
- *  1 = EXIT requested
- * -1 = error
+ * 1 -> valid
+ * 0 -> invalid
  */
+static int parse_expiry_seconds(
+    const char *text,
+    long long *seconds
+)
+{
+    if (
+        text == NULL ||
+        seconds == NULL ||
+        *text == '\0'
+    )
+    {
+        return 0;
+    }
+
+    errno = 0;
+
+    char *end;
+
+    long long value =
+        strtoll(
+            text,
+            &end,
+            10
+        );
+
+    if (
+        errno == ERANGE ||
+        end == text ||
+        *end != '\0'
+    )
+    {
+        return 0;
+    }
+
+    /*
+     * TTL must be positive.
+     */
+    if (value <= 0)
+    {
+        return 0;
+    }
+
+    *seconds = value;
+
+    return 1;
+}
+
 int command_execute(
     HashTable *table,
     char *input,
     char *response,
-    size_t response_size)
+    size_t response_size
+)
 {
     char *argv[MAX_ARGS];
 
-    int argc = parse_command(input, argv, MAX_ARGS);
+    int argc =
+        parse_command(
+            input,
+            argv,
+            MAX_ARGS
+        );
 
     if (argc == -1)
     {
         snprintf(
             response,
             response_size,
-            "ERR invalid command\n");
+            "ERR invalid command\n"
+        );
 
         return -1;
     }
@@ -164,9 +201,9 @@ int command_execute(
     if (argc == 0)
     {
         response[0] = '\0';
+
         return 0;
     }
-
 
     /*
      * Make command name case-insensitive.
@@ -175,87 +212,238 @@ int command_execute(
      * Set -> SET
      * SET -> SET
      */
-    for (char *p = argv[0]; *p != '\0'; p++)
+    for (
+        char *p = argv[0];
+        *p != '\0';
+        p++
+    )
     {
-        *p = (char)toupper((unsigned char)*p);
+        *p =
+            (char)toupper(
+                (unsigned char)*p
+            );
     }
 
-
-    /* ================= SET ================= */
-
+    /*
+     * ================= SET =================
+     *
+     * Supported:
+     *
+     * SET key value
+     *
+     * SET key value EX seconds
+     */
     if (strcmp(argv[0], "SET") == 0)
     {
-        if (argc != 3)
+        /*
+         * Normal SET.
+         */
+        if (argc == 3)
         {
+            /*
+             * Persist first.
+             *
+             * No expiration.
+             */
+            if (
+                !persistence_append_set(
+                    argv[1],
+                    argv[2]
+                )
+            )
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR failed to write AOF\n"
+                );
+
+                return -1;
+            }
+
+            /*
+             * Modify memory only after
+             * persistence succeeds.
+             */
+            if (
+                !hash_table_set_with_expiry(
+                    table,
+                    argv[1],
+                    argv[2],
+                    0
+                )
+            )
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR failed to set key\n"
+                );
+
+                return -1;
+            }
+
             snprintf(
                 response,
                 response_size,
-                "ERR wrong number of arguments\n");
+                "OK\n"
+            );
 
-            return -1;
+            return 0;
         }
 
         /*
-         * Write to AOF FIRST.
+         * SET with expiration:
          *
-         * This guarantees that if persistence fails,
-         * we do not modify the in-memory database.
+         * SET key value EX seconds
          */
-        if (!persistence_append_set(argv[1], argv[2]))
+        if (argc == 5)
         {
+            /*
+             * Only EX is supported for now.
+             */
+            for (
+                char *p = argv[3];
+                *p != '\0';
+                p++
+            )
+            {
+                *p =
+                    (char)toupper(
+                        (unsigned char)*p
+                    );
+            }
+
+            if (strcmp(argv[3], "EX") != 0)
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR syntax error\n"
+                );
+
+                return -1;
+            }
+
+            long long seconds;
+
+            if (
+                !parse_expiry_seconds(
+                    argv[4],
+                    &seconds
+                )
+            )
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR invalid expire time\n"
+                );
+
+                return -1;
+            }
+
+            /*
+             * Calculate the absolute expiration
+             * timestamp ONCE.
+             *
+             * This exact timestamp is used both
+             * for persistence and memory.
+             */
+            time_t expires_at =
+                time(NULL) +
+                (time_t)seconds;
+
+            /*
+             * Persist first.
+             */
+            if (
+                !persistence_append_set_expiry(
+                    argv[1],
+                    argv[2],
+                    expires_at
+                )
+            )
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR failed to write AOF\n"
+                );
+
+                return -1;
+            }
+
+            /*
+             * Now update memory.
+             */
+            if (
+                !hash_table_set_with_expiry(
+                    table,
+                    argv[1],
+                    argv[2],
+                    expires_at
+                )
+            )
+            {
+                snprintf(
+                    response,
+                    response_size,
+                    "ERR failed to set key\n"
+                );
+
+                return -1;
+            }
+
             snprintf(
                 response,
                 response_size,
-                "ERR failed to write AOF\n");
+                "OK\n"
+            );
 
-            return -1;
-        }
-
-        /*
-         * Only modify HashTable after persistence succeeds.
-         */
-        if (!hash_table_set(table, argv[1], argv[2]))
-        {
-            snprintf(
-                response,
-                response_size,
-                "ERR failed to set key\n");
-
-            return -1;
+            return 0;
         }
 
         snprintf(
             response,
             response_size,
-            "OK\n");
+            "ERR wrong number of arguments\n"
+        );
 
-        return 0;
+        return -1;
     }
 
-
-    /* ================= GET ================= */
-
-    else if (strcmp(argv[0], "GET") == 0)
+    /*
+     * ================= GET =================
+     */
+    else if (
+        strcmp(argv[0], "GET") == 0
+    )
     {
         if (argc != 2)
         {
             snprintf(
                 response,
                 response_size,
-                "ERR wrong number of arguments\n");
+                "ERR wrong number of arguments\n"
+            );
 
             return -1;
         }
 
         const char *value =
-            hash_table_get(table, argv[1]);
+            hash_table_get(
+                table,
+                argv[1]
+            );
 
         if (value == NULL)
         {
             snprintf(
                 response,
                 response_size,
-                "(nil)\n");
+                "(nil)\n"
+            );
         }
         else
         {
@@ -263,37 +451,47 @@ int command_execute(
                 response,
                 response_size,
                 "%s\n",
-                value);
+                value
+            );
         }
 
         return 0;
     }
 
-
-    /* ================= DEL ================= */
-
-    else if (strcmp(argv[0], "DEL") == 0)
+    /*
+     * ================= DEL =================
+     */
+    else if (
+        strcmp(argv[0], "DEL") == 0
+    )
     {
         if (argc != 2)
         {
             snprintf(
                 response,
                 response_size,
-                "ERR wrong number of arguments\n");
+                "ERR wrong number of arguments\n"
+            );
 
             return -1;
         }
 
         /*
-         * Check whether the key exists BEFORE
-         * writing DEL to the AOF.
+         * If key does not exist or has expired,
+         * GET returns NULL.
          */
-        if (hash_table_get(table, argv[1]) == NULL)
+        if (
+            hash_table_get(
+                table,
+                argv[1]
+            ) == NULL
+        )
         {
             snprintf(
                 response,
                 response_size,
-                "0\n");
+                "0\n"
+            );
 
             return 0;
         }
@@ -301,25 +499,36 @@ int command_execute(
         /*
          * Persist first.
          */
-        if (!persistence_append_del(argv[1]))
+        if (
+            !persistence_append_del(
+                argv[1]
+            )
+        )
         {
             snprintf(
                 response,
                 response_size,
-                "ERR failed to write AOF\n");
+                "ERR failed to write AOF\n"
+            );
 
             return -1;
         }
 
         /*
-         * Delete from memory only after persistence succeeds.
+         * Delete from memory.
          */
-        if (!hash_table_delete(table, argv[1]))
+        if (
+            !hash_table_delete(
+                table,
+                argv[1]
+            )
+        )
         {
             snprintf(
                 response,
                 response_size,
-                "ERR failed to delete key\n");
+                "ERR failed to delete key\n"
+            );
 
             return -1;
         }
@@ -327,22 +536,26 @@ int command_execute(
         snprintf(
             response,
             response_size,
-            "1\n");
+            "1\n"
+        );
 
         return 0;
     }
 
-
-    /* ================= PING ================= */
-
-    else if (strcmp(argv[0], "PING") == 0)
+    /*
+     * ================= PING =================
+     */
+    else if (
+        strcmp(argv[0], "PING") == 0
+    )
     {
         if (argc != 1)
         {
             snprintf(
                 response,
                 response_size,
-                "ERR wrong number of arguments\n");
+                "ERR wrong number of arguments\n"
+            );
 
             return -1;
         }
@@ -350,28 +563,28 @@ int command_execute(
         snprintf(
             response,
             response_size,
-            "PONG\n");
+            "PONG\n"
+        );
 
         return 0;
     }
 
-
-    /* ================= EXIT ================= */
-
-    else if (strcmp(argv[0], "EXIT") == 0)
+    /*
+     * ================= EXIT =================
+     */
+    else if (
+        strcmp(argv[0], "EXIT") == 0
+    )
     {
-        /*
-         * EXIT is mainly useful for the CLI.
-         *
-         * The caller decides what to do with the
-         * EXIT request.
-         */
-        if (!persistence_rewrite(table))
+        if (
+            !persistence_rewrite(table)
+        )
         {
             snprintf(
                 response,
                 response_size,
-                "ERR failed to rewrite AOF\n");
+                "ERR failed to rewrite AOF\n"
+            );
 
             return -1;
         }
@@ -379,34 +592,30 @@ int command_execute(
         snprintf(
             response,
             response_size,
-            "BYE\n");
+            "BYE\n"
+        );
 
         return 1;
     }
 
-
-    /* ================= UNKNOWN ================= */
-
+    /*
+     * ================= UNKNOWN =================
+     */
     else
     {
         snprintf(
             response,
             response_size,
-            "ERR unknown command\n");
+            "ERR unknown command\n"
+        );
 
         return -1;
     }
 }
 
-
-/*
- * Local CLI loop.
- *
- * This is now just a frontend around command_execute().
- *
- * The networking layer will NOT use this function.
- */
-void command_loop(HashTable *table)
+void command_loop(
+    HashTable *table
+)
 {
     char input[INPUT_SIZE];
 
@@ -416,7 +625,13 @@ void command_loop(HashTable *table)
     {
         printf("InMemDB> ");
 
-        if (fgets(input, sizeof(input), stdin) == NULL)
+        if (
+            fgets(
+                input,
+                sizeof(input),
+                stdin
+            ) == NULL
+        )
         {
             break;
         }
@@ -424,22 +639,27 @@ void command_loop(HashTable *table)
         /*
          * Remove newline added by fgets().
          */
-        input[strcspn(input, "\n")] = '\0';
+        input[
+            strcspn(
+                input,
+                "\n"
+            )
+        ] = '\0';
 
         int result =
             command_execute(
                 table,
                 input,
                 response,
-                sizeof(response));
+                sizeof(response)
+            );
 
-        /*
-         * Print whatever command_execute()
-         * generated.
-         */
         if (response[0] != '\0')
         {
-            printf("%s", response);
+            printf(
+                "%s",
+                response
+            );
         }
 
         /*
