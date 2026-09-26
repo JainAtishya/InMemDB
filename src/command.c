@@ -316,18 +316,30 @@ int command_execute(
         /*
          * Persist first.
          *
-         * IMPORTANT:
-         * For EX we use the expiry-aware persistence
-         * function.
+         * BUG FIX: Previously, expiry_seconds (a relative
+         * duration) was passed directly to
+         * persistence_append_set_expiry(), which expects an
+         * absolute Unix timestamp (EXAT). This caused all
+         * TTL keys to appear already-expired (timestamp ~10
+         * = 1970-01-01 00:00:10) on every server restart.
+         *
+         * Fix: convert relative seconds -> absolute timestamp
+         * before the AOF write, and use the SAME value for
+         * the in-memory entry so both are always consistent.
          */
         int persisted;
 
+        /* Absolute expiration timestamp (0 = no expiry). */
+        time_t expires_at = 0;
+
         if (has_expiry)
         {
+            expires_at = time(NULL) + (time_t)expiry_seconds;
+
             persisted = persistence_append_set_expiry(
                 argv[1],
                 argv[2],
-                expiry_seconds
+                expires_at
             );
         }
         else
@@ -371,6 +383,10 @@ int command_execute(
 
         /*
          * Apply expiration to the newly created/updated entry.
+         *
+         * We use the same absolute timestamp (expires_at) that
+         * was written to the AOF, ensuring memory and disk are
+         * always consistent.
          */
         if (has_expiry)
         {
@@ -390,10 +406,8 @@ int command_execute(
                 return -1;
             }
 
-            entry_set_expiry(
-                entry,
-                expiry_seconds
-            );
+            /* Set absolute timestamp directly (already computed above). */
+            entry->expires_at = expires_at;
         }
         else
         {
